@@ -34,6 +34,7 @@ from .knowledge_base import (
     search_component,
     get_component_info,
     get_best_practices,
+    get_architecture_pattern,
 )
 from .templates import (
     TemplateGenerator,
@@ -70,6 +71,7 @@ from .templates import (
     generate_throwable_item_json,
     generate_bow_item_json,
 )
+from ._ui_and_manifest import generate_ui_json, generate_manifest_json
 
 
 # 创建 MCP Server 实例
@@ -83,18 +85,17 @@ server = Server(
 
 ⚠️ 在编写任何代码之前，必须先查阅文档！这是强制性要求。
 
-1. **事件参数必须查文档**
-   - 使用任何事件前，必须先调用 search_api (entry_type="event") 查询该事件的参数定义
+1. **查找API/事件的推荐流程**
+   - **首选**: 加载 api-index://full Resource 浏览完整API索引，用自身语义理解直接找到正确API名
+   - **次选**: 用 search_api 关键词搜索（适合探索性搜索）
+   - 找到API名后，用 get_api_detail(name) 获取完整参数签名
+   - 禁止假设参数名，必须通过 get_api_detail 查证后再使用
+
+2. **事件参数必须查文档**
    - 不同事件的参数名不一致！例如：
      * ServerPlayerTryDestroyBlockEvent 使用 "playerId" 和 "cancel"
      * ServerItemUseOnEvent 使用 "entityId" 和 "ret"
-   - 禁止假设参数名，必须查证后再使用
-
-2. **API 接口必须查文档**
-   - 使用任何 API 前，必须先调用 search_api (entry_type="api") 查询接口定义
-   - 确认参数类型、返回值、是否存在该接口
-   - 禁止凭记忆或假设编写 API 调用
-   - search_api 基于结构化数据精确匹配，比 search_docs 更精准且节省上下文
+   - 使用 get_api_detail(事件名) 获取精确参数定义
 
 3. **组件和 JSON 格式必须查文档**
    - 使用 search_component 查询组件的正确格式
@@ -332,15 +333,79 @@ async def list_resources() -> List[Resource]:
             mimeType="text/markdown"
         )
     )
-    
+
+    # API/事件紧凑索引 Resource — 让 LLM 直接看到所有 API，用自身语义能力匹配
+    resources.append(
+        Resource(
+            uri="api-index://full",
+            name="ModSDK API/事件完整索引",
+            description="1879个API/事件的紧凑索引（按分类组织）。LLM可直接阅读此索引找到正确的API名称，然后用get_api_detail获取完整签名。比search_api更精准。",
+            mimeType="text/plain"
+        )
+    )
+
+    # 按顶级分类拆分的子索引
+    docs_reader = get_docs_reader()
+    categories = docs_reader.get_api_categories()
+    for top_cat in sorted(categories.keys()):
+        total = sum(categories[top_cat].values())
+        if total > 0:
+            resources.append(
+                Resource(
+                    uri=f"api-index://{top_cat}",
+                    name=f"ModSDK索引: {top_cat} ({total}条)",
+                    description=f"{top_cat}分类下的API/事件索引，含{total}个条目",
+                    mimeType="text/plain"
+                )
+            )
+
+    # 网易官方教程 Resource — 高频使用的教程文档可直接加载
+    GUIDE_RESOURCES = [
+        ("guide://json-ui", "JSON UI 完整说明文档",
+         "网易官方JSON UI教程（2741行），含控件类型、属性、数据绑定、动画、_ui_defs等完整参考",
+         "mcguide/18-界面与交互/30-UI说明文档.md"),
+        ("guide://custom-dimension", "自定义维度教程合集",
+         "网易官方自定义维度教程（7篇），含维度配置、群系地貌、生物生成、自定义特征、传送门等",
+         "mcguide/20-玩法开发/15-自定义游戏内容/4-自定义维度"),
+        ("guide://custom-block", "自定义方块教程合集",
+         "网易官方自定义方块教程，含JSON组件（675行）、方块功能、特殊方块等",
+         "mcguide/20-玩法开发/15-自定义游戏内容/2-自定义方块"),
+        ("guide://custom-entity", "自定义实体教程合集",
+         "网易官方自定义实体教程，含实体组件、AI行为、动画、渲染等",
+         "mcguide/20-玩法开发/15-自定义游戏内容/1-自定义实体"),
+        ("guide://custom-item", "自定义物品教程合集",
+         "网易官方自定义物品教程，含物品组件、物品事件等",
+         "mcguide/20-玩法开发/15-自定义游戏内容/3-自定义物品"),
+        ("guide://particle-effect", "粒子特效教程合集",
+         "网易官方特效教程（8篇），含原版粒子、中国版粒子/序列帧配置文件解析等",
+         "mcguide/16-美术/9-特效"),
+    ]
+
+    for uri_str, name, desc, _ in GUIDE_RESOURCES:
+        resources.append(
+            Resource(uri=uri_str, name=name, description=desc, mimeType="text/markdown")
+        )
+
     return resources
 
 
+# 教程 Resource 路径映射（用于 read_resource）
+_GUIDE_RESOURCE_PATHS = {
+    "json-ui": "mcguide/18-界面与交互/30-UI说明文档.md",
+    "custom-dimension": "mcguide/20-玩法开发/15-自定义游戏内容/4-自定义维度",
+    "custom-block": "mcguide/20-玩法开发/15-自定义游戏内容/2-自定义方块",
+    "custom-entity": "mcguide/20-玩法开发/15-自定义游戏内容/1-自定义实体",
+    "custom-item": "mcguide/20-玩法开发/15-自定义游戏内容/3-自定义物品",
+    "particle-effect": "mcguide/16-美术/9-特效",
+}
+
+
 @server.read_resource()
-async def read_resource(uri: str) -> str:
+async def read_resource(uri) -> str:
     """读取指定的 Resource 内容"""
+    uri = str(uri)  # AnyUrl -> str
     skills_reader = get_skills_reader()
-    
+
     # 解析 URI
     if uri.startswith("skill://"):
         name = uri[8:]  # 移除 "skill://" 前缀
@@ -363,8 +428,96 @@ async def read_resource(uri: str) -> str:
         else:
             return f"Standard '{name}' 不存在。"
     
+    elif uri.startswith("api-index://"):
+        from urllib.parse import unquote
+        key = unquote(uri[12:])  # 移除前缀 + URL解码中文
+        docs_reader = get_docs_reader()
+
+        if key == "full":
+            # 全量紧凑索引
+            return docs_reader.generate_compact_index(include_params=False)
+        else:
+            # 按分类过滤的子索引
+            index = docs_reader.generate_compact_index(include_params=False)
+            # 从全量索引中提取指定分类的段落
+            lines = index.splitlines()
+            result_lines = []
+            in_target = False
+            target_header = f"## {key} "
+
+            for line in lines:
+                if line.startswith("## 常见操作速查"):
+                    # 始终包含速查表
+                    in_target = True
+                elif line.startswith("## ") and not line.startswith("###"):
+                    in_target = line.startswith(target_header)
+
+                if in_target:
+                    result_lines.append(line)
+
+            if result_lines:
+                return "\n".join(result_lines)
+            else:
+                return f"分类 '{key}' 不存在。可用分类请查看 api-index://full"
+
+    elif uri.startswith("guide://"):
+        from urllib.parse import unquote
+        key = unquote(uri[8:])
+        docs_reader = get_docs_reader()
+
+        if key not in _GUIDE_RESOURCE_PATHS:
+            return f"教程 '{key}' 不存在。可用教程: {', '.join(_GUIDE_RESOURCE_PATHS.keys())}"
+
+        rel_path = _GUIDE_RESOURCE_PATHS[key]
+
+        if not docs_reader.guide_root:
+            return "未找到网易官方教程文档目录。请设置 MODSDK_WIKI_PATH 环境变量。"
+
+        target = Path(docs_reader.guide_root) / rel_path
+
+        if target.is_file():
+            # 单文件教程（如 JSON UI 说明文档）
+            with open(target, "r", encoding="utf-8") as f:
+                return f.read()
+        elif target.is_dir():
+            # 目录教程（合并多个 md 文件）
+            parts = []
+            for md_file in sorted(target.rglob("*.md")):
+                with open(md_file, "r", encoding="utf-8") as f:
+                    content = f.read().strip()
+                if content:
+                    # 添加文件名作为分隔
+                    rel_name = str(md_file.relative_to(target))
+                    parts.append(f"---\n## 📄 {rel_name}\n---\n\n{content}")
+            return "\n\n".join(parts) if parts else f"目录 '{rel_path}' 下没有 md 文件"
+        else:
+            return f"路径不存在: {rel_path}"
+
     else:
         return f"未知的资源 URI: {uri}"
+
+
+def _try_inline_enum(docs_reader, text: str) -> Optional[str]:
+    """检测文本中的枚举引用，返回内联字符串。
+    支持格式: [AttrType枚举](...), 枚举值文档的[AttrType](...), AttrType枚举
+    """
+    if not text:
+        return None
+    # 匹配 [XXX枚举] 或 [XXX] 后面跟枚举相关链接
+    import re
+    patterns = [
+        r'\[([A-Za-z]\w+?)枚举\]',      # [AttrType枚举](...)
+        r'枚举值文档的\[([A-Za-z]\w+?)\]',  # 枚举值文档的[AttrType](...)
+        r'\[([A-Za-z]\w+?)\]\([^)]*枚举值',  # [AttrType](../枚举值/...)
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            enum_name = match.group(1)
+            inline = docs_reader.get_enum_inline(enum_name)
+            if inline:
+                return f"  - {enum_name}: {inline}"
+    return None
 
 
 def _get_combined_rules() -> str:
@@ -471,20 +624,12 @@ async def list_tools() -> List[Tool]:
         # 文档查询工具
         Tool(
             name="search_docs",
-            description="""搜索 ModSDK 文档（支持模糊搜索）。
+            description="""搜索 ModSDK API 参考文档的详细说明、备注、代码示例和枚举值。
 
-注意：如果要查找具体的 API 接口或事件，优先使用 search_api 工具，更精准且消耗更少上下文。
-本工具适合搜索教程、概念说明、最佳实践等文档内容。
+⚠️ 查找具体 API/事件请优先用 search_api（更精准、更省上下文）。
+本工具适合搜索：API 的详细用法说明、参数备注、代码示例、枚举值定义。
 
-支持特性：
-- 模糊匹配（允许拼写错误）
-- 驼峰分词（"comp factory" 匹配 "GetEngineCompFactory"）
-- 中文搜索
-
-示例：
-- "tick 优化" - 查找优化方法
-- "自定义UI" - 查找 UI 相关文档
-- "背包 物品" - 查找背包相关内容""",
+支持：模糊匹配、驼峰分词、中文搜索。""",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -510,15 +655,14 @@ async def list_tools() -> List[Tool]:
             name="search_api",
             description="""精确搜索 ModSDK 的 API 接口或事件（利用结构化数据索引）。
 
-比 search_docs 更精准、更节省上下文。适合查找具体的 API 函数或事件名。
+⚠️ 推荐优先使用 api-index://full Resource 直接浏览API索引，LLM语义理解比关键词搜索更精准。
+找到API名后用 get_api_detail 获取完整签名。本工具适合探索性搜索（不确定API名称时）。
 
 搜索示例：
 - "GetPlayerPos" - 查找获取玩家位置的 API
 - "玩家死亡" - 查找玩家死亡相关事件
-- "背包" - 查找背包相关的 API 和事件
-- "SetBlock" - 查找方块放置相关的 API
-
-返回结果包含：API/事件名、描述、参数列表、返回值、所属端侧。""",
+- "按钮" / "button" - 查找 UI 按钮相关 API
+- "SetBlock" - 查找方块放置相关的 API""",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -542,8 +686,25 @@ async def list_tools() -> List[Tool]:
             }
         ),
         Tool(
+            name="get_api_detail",
+            description="""按精确名称获取 API/事件的完整详情（参数签名、返回值、描述）。
+
+推荐工作流：先通过 api-index Resource 浏览索引找到API名 → 再用本工具获取完整签名。
+也可配合 search_api 使用：search_api 找到大致目标 → get_api_detail 获取精确参数。""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "API或事件的精确名称，如 'SpawnItemToPlayerInv'、'MobDieEvent'"
+                    }
+                },
+                "required": ["name"]
+            }
+        ),
+        Tool(
             name="get_document",
-            description="获取指定文档的完整内容。需要提供文档的文件路径。",
+            description="获取指定文档内容。大文档（>8000字符）会自动返回目录结构，建议优先使用 get_document_section 获取具体章节。",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -1046,6 +1207,11 @@ behavior_pack_<namespace>/netease_recipes/<recipe_id>.json""",
                         "type": "string",
                         "description": "刷怪蛋覆盖色（十六进制）",
                         "default": "#000000"
+                    },
+                    "preset": {
+                        "type": "string",
+                        "description": "实体预设，自动添加相关行为组件: mount(坐骑:rideable+tameable+follow_owner), pet(宠物:follow_owner+协助攻击), npc(NPC:不可攻击+不移动), hostile(敌对:近战+仇恨)",
+                        "enum": ["mount", "pet", "npc", "hostile"]
                     }
                 },
                 "required": ["namespace", "entity_id"]
@@ -1309,6 +1475,46 @@ behavior_pack_<namespace>/spawn_rules/<namespace>_<entity_id>.json
             }
         ),
         
+        # JSON UI 模板生成工具
+        Tool(
+            name="generate_ui_json",
+            description="""生成 JSON UI 文件模板。
+
+【模板类型】
+- screen: 基础空白屏幕（含标题+关闭按钮）
+- shop_grid: 商品网格列表（grid + scroll_view）
+- dialog: 确认/取消弹窗对话框
+- hud: HUD叠加元素（数值+图标+进度条）
+- tab_panel: 多页签面板（toggle切换+内容区域）
+
+【输出】JSON UI 文件内容 + _ui_defs.json 注册条目 + 使用说明""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "template": {"type": "string", "description": "模板类型: screen/shop_grid/dialog/hud/tab_panel", "enum": ["screen", "shop_grid", "dialog", "hud", "tab_panel"]},
+                    "namespace": {"type": "string", "description": "命名空间（全局唯一，如 'my_shop'）"},
+                    "title": {"type": "string", "description": "标题文本（可选）"},
+                    "columns": {"type": "integer", "description": "商品网格列数（shop_grid专用，默认4）"},
+                    "tabs": {"type": "array", "items": {"type": "string"}, "description": "页签名称列表（tab_panel专用）"},
+                    "message": {"type": "string", "description": "提示消息（dialog专用）"}
+                },
+                "required": ["template", "namespace"]
+            }
+        ),
+        Tool(
+            name="generate_manifest_json",
+            description="生成行为包+资源包的 manifest.json（UUID自动生成，行为包自动关联资源包）。",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "mod_name": {"type": "string", "description": "MOD名称"},
+                    "description": {"type": "string", "description": "描述（可选）"},
+                    "version": {"type": "string", "description": "版本号（如 '1.0.0'，可选）", "default": "1.0.0"}
+                },
+                "required": ["mod_name"]
+            }
+        ),
+
         # 代码审查工具
         Tool(
             name="review_code",
@@ -1459,6 +1665,25 @@ behavior_pack_<namespace>/spawn_rules/<namespace>_<entity_id>.json
             }
         ),
         Tool(
+            name="get_architecture_pattern",
+            description="""获取 ModSDK 核心架构模式的完整代码示例。
+
+当你不确定如何组合多个API实现一个完整功能时，先查架构模式。
+
+可用模式：跨端通信、组件使用、UI开发流程、实体创建与管理、定时任务、物品掉落与生成
+不传参数返回所有可用模式列表。""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "pattern_name": {
+                        "type": "string",
+                        "description": "模式名称，如'跨端通信'、'UI开发流程'、'物品掉落'。支持模糊匹配。"
+                    }
+                },
+                "required": []
+            }
+        ),
+        Tool(
             name="list_modsdk_events",
             description="""列出 ModSDK 常用事件。
 
@@ -1480,6 +1705,30 @@ behavior_pack_<namespace>/spawn_rules/<namespace>_<entity_id>.json
                 },
                 "required": []
             }
+        ),
+        Tool(
+            name="browse_api_category",
+            description="""按分类浏览API/事件列表。当 search_api 搜索不到时，用此工具按分类逐步缩小范围。
+
+可用一级分类：实体、玩家、方块、世界、物品、特效、控制、模型、自定义UI、后处理、音效等。
+支持二级分类路径，如"实体/属性"、"世界/天气"、"玩家/背包"。
+不传 category 参数时返回完整分类目录树。""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "category": {
+                        "type": "string",
+                        "description": "分类路径，如'实体/属性'、'世界/天气'、'后处理'。支持模糊匹配。不传则返回全部分类目录。"
+                    },
+                    "entry_type": {
+                        "type": "string",
+                        "description": "筛选类型",
+                        "enum": ["all", "api", "event"],
+                        "default": "all"
+                    },
+                },
+                "required": []
+            }
         )
     ]
 
@@ -1487,7 +1736,7 @@ behavior_pack_<namespace>/spawn_rules/<namespace>_<entity_id>.json
 @server.call_tool()
 async def call_tool(name: str, arguments: Dict[str, Any]) -> List[TextContent]:
     """处理工具调用"""
-    
+
     docs_reader = get_docs_reader()
     
     # 文档查询工具
@@ -1504,41 +1753,140 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[TextContent]:
         output = f"## 搜索结果: {query} ({len(results)} 个)\n\n"
         
         for i, result in enumerate(results, 1):
-            output += f"{i}. **{result['title']}** `{result['filepath']}` (分数:{result['score']})\n"
-            
-            # 匹配项精简为一行
+            output += f"{i}. **{result['title']}** `{result['filepath']}`\n"
+
+            # 匹配项最多 2 个
             if fuzzy and result.get('matched_terms'):
-                output += f"   匹配: {', '.join(result['matched_terms'])}\n"
-            
-            output += f"   {result['snippet']}\n\n"
+                output += f"   匹配: {', '.join(result['matched_terms'][:2])}\n"
+
+            # snippet 截短到 80 字符
+            snippet = result.get('snippet', '')
+            if len(snippet) > 80:
+                snippet = snippet[:80] + "..."
+            output += f"   {snippet}\n\n"
         
         return [TextContent(type="text", text=output)]
     
+    elif name == "get_api_detail":
+        api_name = arguments.get("name", "")
+        detail = docs_reader.get_api_detail(api_name)
+
+        if not detail:
+            output = f"未找到名为 `{api_name}` 的API或事件。请检查名称拼写。\n"
+            output += "提示：可通过 api-index Resource 浏览完整索引，或用 search_api 模糊搜索。"
+            return [TextContent(type="text", text=output)]
+
+        # 支持同名多端API（如 GetPos 有服务端和客户端两个版本）
+        entries = detail if isinstance(detail, list) else [detail]
+        output = f"## `{api_name}` 详情\n\n"
+
+        for entry in entries:
+            side = entry.get("side", "")
+            output += f"### {entry['name']} ({side})\n"
+            output += f"- 类型: {entry['type']} | 分类: {entry.get('category', '无')}\n"
+            output += f"- 描述: {entry['desc']}\n"
+
+            if entry.get('params'):
+                param_strs = []
+                enum_notes = []
+                for p in entry['params']:
+                    pname = p.get('param_name', '')
+                    ptype = p.get('param_type', '')
+                    pcomment = p.get('param_comment', '')
+                    param_strs.append(f"  - `{pname}`({ptype}){' — ' + pcomment if pcomment else ''}")
+                    # 自动检测枚举引用并内联（覆盖全部 73 个枚举）
+                    inline = _try_inline_enum(docs_reader, pcomment)
+                    if inline:
+                        enum_notes.append(inline)
+                output += "- 参数:\n" + "\n".join(param_strs) + "\n"
+                if enum_notes:
+                    output += "- 枚举值:\n" + "\n".join(enum_notes) + "\n"
+
+            ret = entry.get('return', {})
+            if ret:
+                rtype = ret.get('return_type', '')
+                rcomment = ret.get('return_comment', '')
+                if rtype:
+                    output += f"- 返回: `{rtype}`{' — ' + rcomment if rcomment else ''}\n"
+
+            output += "\n"
+
+        return [TextContent(type="text", text=output)]
+
     elif name == "search_api":
         query = arguments.get("query", "")
         entry_type = arguments.get("entry_type", "all")
         limit = arguments.get("limit", 5)
         results = docs_reader.search_api(query, limit=limit, entry_type=entry_type)
         
-        if not results:
-            return [TextContent(type="text", text=f"未找到与 '{query}' 相关的 API/事件。\n\n提示：尝试使用英文 API 名（如 'GetBlock'）或中文描述（如 '玩家背包'）。")]
-        
         type_label = {"api": "接口", "event": "事件", "all": "API/事件"}.get(entry_type, "API/事件")
+
+        if not results:
+            # 智能兜底：从查询提取token匹配相关分类，引导LLM用browse_api_category逐步发现
+            tokens = docs_reader._tokenize(query)
+            categories = docs_reader.get_api_categories()
+
+            related_cats = []
+            for cat_top, subs in categories.items():
+                for token in tokens:
+                    tl = token.lower()
+                    if tl in cat_top.lower() or any(tl in s.lower() for s in subs if s):
+                        total = sum(subs.values())
+                        related_cats.append((cat_top, total, subs))
+                        break
+            related_cats.sort(key=lambda x: -x[1])
+
+            output = f"## 未找到与 '{query}' 精确匹配的{type_label}\n\n"
+
+            if related_cats:
+                output += "### 相关分类（可用 `browse_api_category` 浏览）\n\n"
+                for cat, count, subs in related_cats[:5]:
+                    sub_list = ", ".join(s for s in sorted(subs.keys()) if s)[:50]
+                    output += f"- **{cat}**（{count}个） — {sub_list}\n"
+                output += "\n"
+
+            output += "### 全部一级分类\n\n"
+            sorted_cats = sorted(categories.items(), key=lambda x: -sum(x[1].values()))
+            for cat, subs in sorted_cats[:12]:
+                total = sum(subs.values())
+                sub_list = ", ".join(s for s in sorted(subs.keys()) if s)[:40]
+                output += f"- **{cat}**（{total}） — {sub_list}\n"
+
+            output += "\n### 建议下一步\n\n"
+            output += "1. 使用 `browse_api_category` 工具，传入上述分类名浏览详细列表\n"
+            output += "2. 尝试用英文API名搜索（如 `SetPos`、`GetBlock`）\n"
+            output += "3. 使用 `get_document_structure` 查看相关文档的章节目录\n"
+
+            return [TextContent(type="text", text=output)]
         output = f"## {type_label}搜索结果: {query}\n\n"
-        
+
         for i, r in enumerate(results, 1):
+            # 紧凑参数格式 + 枚举自动内联（从 docs/枚举值/*.md 解析，非硬编码）
+            params_parts = []
+            inline_notes = []
+            if r['params']:
+                for p in r['params']:
+                    pname = p['param_name']
+                    ptype = p.get('param_type', '')
+                    pdesc = p.get('param_desc', '')
+                    params_parts.append(f"`{pname}`({ptype}) {pdesc}")
+                    # 自动检测枚举引用并内联（覆盖全部 73 个枚举）
+                    inline = _try_inline_enum(docs_reader, pdesc)
+                    if inline:
+                        inline_notes.append(inline)
+
+            ret = r.get('return', {})
+            ret_str = ret.get('return_type', '') if ret else ''
+
             output += f"### {i}. `{r['name']}` ({r['side']})\n"
             output += f"- 类型: {r['type']} | 分类: {r['category']}\n"
             output += f"- 描述: {r['desc']}\n"
-            if r['params']:
-                params_str = ", ".join(
-                    f"`{p['param_name']}`({p.get('param_type','')}) {p.get('param_comment','')}"
-                    for p in r['params']
-                )
-                output += f"- 参数: {params_str}\n"
-            ret = r.get('return', {})
-            if ret and ret.get('return_type'):
-                output += f"- 返回: {ret['return_type']} - {ret.get('return_comment', '')}\n"
+            if params_parts:
+                output += f"- 参数: {', '.join(params_parts)}\n"
+                for note in inline_notes:
+                    output += f"{note}\n"
+            if ret_str:
+                output += f"- 返回: {ret_str}\n"
             output += "\n"
         
         return [TextContent(type="text", text=output)]
@@ -1546,11 +1894,23 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[TextContent]:
     elif name == "get_document":
         filepath = arguments.get("filepath", "")
         doc = docs_reader.get_document(filepath)
-        
+
         if not doc:
             return [TextContent(type="text", text=f"文档 '{filepath}' 不存在。")]
-        
-        return [TextContent(type="text", text=f"# {doc.title}\n\n{doc.content}")]
+
+        content = doc.content
+        # 截断保护：超过 8000 字符时只返回目录 + 提示，避免灾难性上下文消耗
+        if len(content) > 8000:
+            structure = docs_reader.get_document_structure(filepath)
+            if structure:
+                toc = "\n".join(f"{'  ' * (s['level']-1)}- {s['title']}" for s in structure)
+                return [TextContent(type="text", text=(
+                    f"# {doc.title}\n\n"
+                    f"⚠️ 文档较长（{len(content)}字符），已返回目录结构。"
+                    f"请使用 get_document_section 获取具体章节内容。\n\n"
+                    f"## 目录\n{toc}"
+                ))]
+        return [TextContent(type="text", text=f"# {doc.title}\n\n{content}")]
     
     elif name == "get_document_section":
         filepath = arguments.get("filepath", "")
@@ -1760,7 +2120,8 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[TextContent]:
             collision_height=arguments.get("collision_height", 1.8),
             runtime_identifier=arguments.get("runtime_identifier"),
             spawn_egg_base_color=arguments.get("spawn_egg_base_color", "#FFFFFF"),
-            spawn_egg_overlay_color=arguments.get("spawn_egg_overlay_color", "#000000")
+            spawn_egg_overlay_color=arguments.get("spawn_egg_overlay_color", "#000000"),
+            preset=arguments.get("preset")
         )
         
         pack_id = namespace
@@ -1995,6 +2356,35 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[TextContent]:
         output += f"### 📝 本地化条目 (texts/zh_CN.lang)\n\n```\nitem.{namespace}:{item_id}.name=自定义投掷物\n```"
         return [TextContent(type="text", text=output)]
     
+    # JSON UI 模板生成
+    elif name == "generate_ui_json":
+        template = arguments.get("template", "screen")
+        namespace = arguments.get("namespace", "my_ui")
+        kwargs = {k: v for k, v in arguments.items() if k not in ("template", "namespace")}
+        result = generate_ui_json(template, namespace, **kwargs)
+
+        if "error" in result:
+            return [TextContent(type="text", text=result["error"])]
+
+        output = "## JSON UI 模板: {} ({})\n\n".format(namespace, template)
+        output += "### UI JSON 文件\n\n路径: `resource_pack/ui/{}.json`\n\n```json\n{}\n```\n\n".format(namespace, result["ui_json"])
+        output += "### _ui_defs.json 条目\n\n```json\n{}\n```\n\n".format(result["ui_defs_entry"])
+        output += "### 使用说明\n\n{}\n".format(result["usage_hint"])
+        return [TextContent(type="text", text=output)]
+
+    # manifest.json 生成
+    elif name == "generate_manifest_json":
+        mod_name = arguments.get("mod_name", "MyMod")
+        description = arguments.get("description", "")
+        version = arguments.get("version", "1.0.0")
+        result = generate_manifest_json(mod_name, description, version)
+
+        output = "## manifest.json: {}\n\n".format(mod_name)
+        output += "### 行为包 manifest.json\n\n```json\n{}\n```\n\n".format(result["behavior_manifest"])
+        output += "### 资源包 manifest.json\n\n```json\n{}\n```\n\n".format(result["resource_manifest"])
+        output += "**{}**\n".format(result["note"])
+        return [TextContent(type="text", text=output)]
+
     # 代码审查工具
     elif name == "review_code":
         code = arguments.get("code", "")
@@ -2003,9 +2393,45 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[TextContent]:
         return [TextContent(type="text", text=review_result)]
     
     # ============================================================
+    # 分类浏览工具（搜索兜底）
+    # ============================================================
+
+    elif name == "browse_api_category":
+        category = arguments.get("category", "")
+        entry_type = arguments.get("entry_type", "all")
+
+        if not category:
+            # 无参数：返回完整分类目录树
+            categories = docs_reader.get_api_categories()
+            output = "## API/事件分类目录\n\n"
+            for cat, subs in sorted(categories.items(), key=lambda x: -sum(x[1].values())):
+                total = sum(subs.values())
+                output += f"### {cat}（{total}）\n"
+                for sub, count in sorted(subs.items(), key=lambda x: -x[1]):
+                    if sub:
+                        output += f"- {sub}（{count}）\n"
+                output += "\n"
+            return [TextContent(type="text", text=output)]
+
+        items = docs_reader.browse_api_category(category, entry_type)
+
+        if not items:
+            return [TextContent(type="text", text=f"分类 '{category}' 下没有条目。\n\n使用 `browse_api_category` 不传 category 参数可查看所有分类目录。")]
+
+        type_label = {"api": "接口", "event": "事件", "all": "API/事件"}.get(entry_type, "API/事件")
+        output = f"## {category} 分类下的{type_label}（共{len(items)}个）\n\n"
+        for item in items:
+            output += f"- `{item['name']}` ({item['side']}) — {item['desc']}\n"
+
+        if len(items) > 30:
+            output += f"\n*共{len(items)}个，建议配合 search_api 用具体关键词进一步筛选*\n"
+
+        return [TextContent(type="text", text=output)]
+
+    # ============================================================
     # 知识库查询工具处理
     # ============================================================
-    
+
     elif name == "search_components":
         query = arguments.get("query", "")
         component_type = arguments.get("component_type", "all")
@@ -2103,6 +2529,11 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[TextContent]:
         
         return [TextContent(type="text", text=output)]
     
+    elif name == "get_architecture_pattern":
+        pattern_name = arguments.get("pattern_name", "")
+        result = get_architecture_pattern(pattern_name)
+        return [TextContent(type="text", text=result)]
+
     elif name == "list_modsdk_events":
         side = arguments.get("side", "all")
         output = "## 📋 ModSDK 事件列表\n\n"
